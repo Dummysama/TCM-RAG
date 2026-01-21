@@ -1,0 +1,260 @@
+{
+  "0":{
+    "table":"herb",
+    "path":"data\/中药.xlsx",
+    "exists":true,
+    "rows":9225,
+    "cols":25,
+    "columns":[
+      "药材",
+      "TCM_HerbID",
+      "PINYIN",
+      "LATIN",
+      "English_Name",
+      "TYPE",
+      "功效",
+      "功效_function_eng",
+      "毒性",
+      "药典收录情况",
+      "生物学分类",
+      "生物学分类_ENG",
+      "别名",
+      "规范(Specifications)",
+      "药用部位_ENG",
+      "Property_CHN",
+      "Property_Eng",
+      "Flavor_CHN",
+      "Flavor_ENG",
+      "Meridian_Tropism_CHN",
+      "Meridian_Tropism_ENG",
+      "Indication_CHN",
+      "Indication_ENG",
+      "药材分类",
+      "Syndromes"
+    ],
+    "missing_rate_percent_top10":{
+      "规范(Specifications)":98.98,
+      "毒性":96.93,
+      "别名":94.22,
+      "药典收录情况":92.02,
+      "功效":91.0,
+      "功效_function_eng":90.63,
+      "药材分类":87.3,
+      "Meridian_Tropism_ENG":86.74,
+      "Meridian_Tropism_CHN":86.21,
+      "Flavor_ENG":84.2
+    },
+    "primary_key":[
+      "TCM_HerbID"
+    ],
+    "pk_missing_columns":[
+
+    ],
+    "pk_null_rows":0,
+    "pk_duplicate_rows":1
+  },
+  "1":{
+    "table":"prescription",
+    "path":"data\/TCM方剂（含中成药）.xlsx",
+    "exists":true,
+    "rows":2665,
+    "cols":10,
+    "columns":[
+      "方剂名",
+      "TCM_PrescriptionID",
+      "方剂拼音名",
+      "主治症状（功效）",
+      "主治证候",
+      "主治症状_ENG",
+      "主治证候_ENG",
+      "来源",
+      "TCM_SymptomID",
+      "TCM_SyndromeID"
+    ],
+    "missing_rate_percent_top10":{
+      "TCM_SymptomID":94.18,
+      "TCM_SyndromeID":89.68,
+      "主治证候_ENG":49.19,
+      "主治症状_ENG":49.16,
+      "主治证候":49.12,
+      "方剂名":0.0,
+      "TCM_PrescriptionID":0.0,
+      "方剂拼音名":0.0,
+      "主治症状（功效）":0.0,
+      "来源":0.0
+    },
+    "primary_key":[
+      "TCM_PrescriptionID"
+    ],
+    "pk_missing_columns":[
+
+    ],
+    "pk_null_rows":0,
+    "pk_duplicate_rows":0
+  },
+  "2":{
+    "table":"herb_compound",
+    "path":"data\/中药-化合物关联.xlsx",
+    "exists":true,
+    "rows":138680,
+    "cols":5,
+    "columns":[
+      "Herb",
+      "TCM_HerbID",
+      "Inchikey",
+      "Canonical smiles",
+      "Pubchem_CID"
+    ],
+    "missing_rate_percent_top10":{
+      "Pubchem_CID":54.38,
+      "Inchikey":4.32,
+      "Canonical smiles":0.01,
+      "Herb":0.0,
+      "TCM_HerbID":0.0
+    },
+    "primary_key":[
+      "TCM_HerbID",
+      "Inchikey"
+    ],
+    "pk_missing_columns":[
+
+    ],
+    "pk_null_rows":5990,
+    "pk_duplicate_rows":7162
+  },
+  "3":{
+    "table":"compound_target",
+    "path":"data\/中药化合物-靶标关联.xlsx",
+    "exists":true,
+    "rows":91225,
+    "cols":6,
+    "columns":[
+      "Canonical_smiles",
+      "Inchikey",
+      "Pubchem_CID",
+      "Gene Entrez ID",
+      "Targets (Coding gene offical symbol)",
+      "unify_id"
+    ],
+    "missing_rate_percent_top10":{
+      "Pubchem_CID":46.81,
+      "unify_id":0.46,
+      "Canonical_smiles":0.26,
+      "Inchikey":0.24,
+      "Gene Entrez ID":0.08,
+      "Targets (Coding gene offical symbol)":0.03
+    },
+    "primary_key":[
+      "Inchikey",
+      "Gene Entrez ID"
+    ],
+    "pk_missing_columns":[
+
+    ],
+    "pk_null_rows":287,
+    "pk_duplicate_rows":569
+  },
+  "4":{
+    "table":"symptom",
+    "path":"data\/中医症状.xlsx",
+    "exists":true,
+    "rows":2364,
+    "cols":7,
+    "columns":[
+      "TCM_symptom_name",
+      "TCM_SymptomID",
+      "Symptom_pinYin",
+      "Symptom_definition",
+      "Symptom_locus",
+      "Symptom_property",
+      "Type"
+    ],
+    "missing_rate_percent_top10":{
+      "Symptom_definition":68.53,
+      "Symptom_locus":32.45,
+      "Symptom_property":25.97,
+      "Type":3.3,
+      "TCM_symptom_name":0.0,
+      "TCM_SymptomID":0.0,
+      "Symptom_pinYin":0.0
+    },
+    "primary_key":[
+      "TCM_SymptomID"
+    ],
+    "pk_missing_columns":[
+
+    ],
+    "pk_null_rows":0,
+    "pk_duplicate_rows":0
+  },
+  "5":{
+    "table":"syndrome",
+    "path":"data\/中医证候.xlsx",
+    "exists":true,
+    "rows":232,
+    "cols":5,
+    "columns":[
+      "Syndrome_name",
+      "TCM_SyndromeID",
+      "Syndrome_English",
+      "Syndrome_PinYin",
+      "Syndrome_definition"
+    ],
+    "missing_rate_percent_top10":{
+      "Syndrome_definition":8.19,
+      "Syndrome_English":0.43,
+      "Syndrome_name":0.0,
+      "TCM_SyndromeID":0.0,
+      "Syndrome_PinYin":0.0
+    },
+    "primary_key":[
+      "TCM_SyndromeID"
+    ],
+    "pk_missing_columns":[
+
+    ],
+    "pk_null_rows":0,
+    "pk_duplicate_rows":0
+  },
+  "6":{
+    "table":"transcriptome",
+    "path":"data\/中药转录组学数据 (2).xlsx",
+    "exists":true,
+    "rows":305735,
+    "cols":11,
+    "columns":[
+      "Name(ENG)",
+      "Pubchem Cid",
+      "canonicalsmiles",
+      "inchikey",
+      "genesymbol",
+      "Gene Entrez ID",
+      "P value",
+      "logFC",
+      "abslogFC",
+      "cell line",
+      "unify_id"
+    ],
+    "missing_rate_percent_top10":{
+      "unify_id":4.63,
+      "Gene Entrez ID":4.45,
+      "Name(ENG)":0.0,
+      "Pubchem Cid":0.0,
+      "canonicalsmiles":0.0,
+      "inchikey":0.0,
+      "genesymbol":0.0,
+      "P value":0.0,
+      "logFC":0.0,
+      "abslogFC":0.0
+    },
+    "primary_key":[
+      "Inchikey",
+      "Gene Entrez ID",
+      "Cell line"
+    ],
+    "pk_missing_columns":[
+      "Inchikey",
+      "Cell line"
+    ]
+  }
+}
