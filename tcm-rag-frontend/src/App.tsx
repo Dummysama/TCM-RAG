@@ -2,7 +2,17 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { motion } from "framer-motion";
 import { Plus, Search, Trash2, Send, Edit3, PanelLeftClose, PanelLeftOpen } from "lucide-react";
 import "./index.css";
-import { clearToken, getMe, login, register, setToken } from "./auth";
+import {
+  clearToken,
+  getMe,
+  login,
+  register,
+  setToken,
+  getConversations,
+  createConversationApi,
+  getConversationMessages,
+  askInConversation,
+} from "./auth";
 
 type Role = "user" | "assistant";
 
@@ -18,7 +28,7 @@ type Message = {
 };
 
 type Conversation = {
-  id: string;
+  id: number;
   title: string;
   theme: string;
   createdAt: string;
@@ -50,7 +60,6 @@ type HerbDetail = {
   raw_text?: string;
 };
 
-const STORAGE_KEY = "tcm_rag_frontend_state_stable_v1";
 
 const uid = () => Math.random().toString(36).slice(2, 10);
 const now = () => new Date().toISOString();
@@ -58,7 +67,7 @@ const now = () => new Date().toISOString();
 function buildConversation(title = "新主题会话", theme = "默认主题"): Conversation {
   const t = now();
   return {
-    id: uid(),
+    id: Date.now(),
     title,
     theme,
     createdAt: t,
@@ -78,8 +87,35 @@ function buildInitialConversations(): Conversation[] {
   return [buildConversation()];
 }
 
-function saveState(conversations: Conversation[], activeId: string | null) {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify({ conversations, activeId }));
+function toConversation(raw: any): Conversation {
+  return {
+    id: raw.id,
+    title: raw.title || "新会话",
+    theme: "默认主题",
+    createdAt: raw.created_at || now(),
+    updatedAt: raw.updated_at || now(),
+    messages: [],
+  };
+}
+
+function toMessage(raw: any): Message {
+  let references: string[] = [];
+  try {
+    references = raw.references_json ? JSON.parse(raw.references_json) : [];
+  } catch {
+    references = [];
+  }
+
+  return {
+    id: String(raw.id),
+    role: raw.role,
+    content: raw.content,
+    createdAt: raw.created_at || now(),
+    intent: raw.intent,
+    entity: raw.entity,
+    references,
+    reference_items: [],
+  };
 }
 
 
@@ -183,9 +219,9 @@ export default function App() {
   const initialConversations = buildInitialConversations();
 
   const [conversations, setConversations] = useState<Conversation[]>(initialConversations);
-  const [activeId, setActiveId] = useState<string>(initialConversations[0].id);
+  const [activeId, setActiveId] = useState<number>(initialConversations[0].id);
   const [query, setQuery] = useState("");
-  const [themeName, setThemeName] = useState("默认主题");
+
   const [search, setSearch] = useState("");
   const [sending, setSending] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -204,7 +240,39 @@ export default function App() {
   const [authError, setAuthError] = useState("");
 
 
+//加载会话列表
+    const loadUserConversations = async () => {
+  try {
+    const rows = await getConversations();
 
+    if (!Array.isArray(rows) || rows.length === 0) {
+      const created = await createConversationApi("新会话");
+      const conv = toConversation(created);
+      setConversations([conv]);
+      setActiveId(conv.id);
+      return;
+    }
+
+    const mapped = rows.map(toConversation);
+    const firstId = mapped[0].id;
+
+    const msgRows = await getConversationMessages(firstId);
+    const msgMapped = Array.isArray(msgRows) ? msgRows.map(toMessage) : [];
+
+    mapped[0] = {
+      ...mapped[0],
+      messages: msgMapped,
+    };
+
+    setConversations(mapped);
+    setActiveId(firstId);
+  } catch (error) {
+    console.error("加载会话失败:", error);
+    const fresh = buildInitialConversations();
+    setConversations(fresh);
+    setActiveId(fresh[0].id);
+  }
+};
 
   const endRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
@@ -216,22 +284,23 @@ export default function App() {
   };
 }, [sidebarOpen]);
 
-    useEffect(() => {
-      const bootstrapAuth = async () => {
-        try {
-          const me = await getMe();
-          setCurrentUser(me);
-          setIsAuthenticated(true);
-        } catch {
-          setIsAuthenticated(false);
-          setCurrentUser(null);
-        } finally {
-          setAuthLoading(false);
-        }
-      };
+        useEffect(() => {
+          const bootstrapAuth = async () => {
+            try {
+              const me = await getMe();
+              setCurrentUser(me);
+              setIsAuthenticated(true);
+              await loadUserConversations();
+            } catch {
+              setIsAuthenticated(false);
+              setCurrentUser(null);
+            } finally {
+              setAuthLoading(false);
+            }
+          };
 
-      bootstrapAuth();
-    }, []);
+          bootstrapAuth();
+        }, []);
 
     const handleAuthSubmit = async () => {
       const username = authUsername.trim();
@@ -256,12 +325,9 @@ export default function App() {
         setCurrentUser(me);
         setIsAuthenticated(true);
 
-        // 登录成功后先重置为干净页面，避免继续显示未登录时的本地记录
-        const fresh = buildInitialConversations();
-        setConversations(fresh);
-        setActiveId(fresh[0].id);
         setQuery("");
         setSearch("");
+        await loadUserConversations();
 
         setAuthUsername("");
         setAuthPassword("");
@@ -314,31 +380,35 @@ export default function App() {
 
   useEffect(() => {
     if (activeConversation) {
-      setThemeName(activeConversation.theme);
     }
   }, [activeConversation]);
 
-  useEffect(() => {
-    saveState(conversations, activeId);
-  }, [conversations, activeId]);
+//   useEffect(() => {
+//     saveState(conversations, activeId);
+//   }, [conversations, activeId]);
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [activeConversation?.messages.length, sending]);
 
-  const updateConversation = (id: string, updater: (old: Conversation) => Conversation) => {
+  const updateConversation = (id: number, updater: (old: Conversation) => Conversation) => {
     setConversations((prev) => prev.map((c) => (c.id === id ? updater(c) : c)));
   };
 
-  const createConversation = () => {
-    const title = `主题会话 ${conversations.length + 1}`;
-    const conv = buildConversation(title, themeName.trim() || "默认主题");
+const createConversation = async () => {
+  try {
+    const row = await createConversationApi("新会话");
+    const conv = toConversation(row);
+
     setConversations((prev) => [conv, ...prev]);
     setActiveId(conv.id);
     setSidebarOpen(false);
-  };
+  } catch (error) {
+    console.error("创建会话失败:", error);
+  }
+};
 
-  const deleteConversation = (id: string) => {
+  const deleteConversation = (id: number) => {
     const next = conversations.filter((c) => c.id !== id);
     if (!next.length) {
       const seed = buildConversation();
@@ -352,7 +422,7 @@ export default function App() {
     }
   };
 
-  const renameConversation = (id: string) => {
+  const renameConversation = (id: number) => {
     const nextTitle = window.prompt("请输入新的会话标题");
     if (!nextTitle?.trim()) return;
 
@@ -362,6 +432,29 @@ export default function App() {
       updatedAt: now(),
     }));
   };
+
+const openConversation = async (id: number) => {
+  try {
+    setActiveId(id);
+    setSidebarOpen(false);
+
+    const rows = await getConversationMessages(id);
+    const mapped = Array.isArray(rows) ? rows.map(toMessage) : [];
+
+    setConversations((prev) =>
+      prev.map((c) =>
+        c.id === id
+          ? {
+              ...c,
+              messages: mapped,
+            }
+          : c
+      )
+    );
+  } catch (error) {
+    console.error("加载会话消息失败:", error);
+  }
+};
 
   const send = async () => {
     try {
@@ -386,34 +479,26 @@ export default function App() {
         messages: [...old.messages, userMsg],
       }));
 
-      const latestConv: Conversation = {
-        ...activeConversation,
-        messages: [...activeConversation.messages, userMsg],
-      };
+      const resp = await askInConversation(activeConversation.id, userText);
 
-      const resp = await apiClient.ask(userText, latestConv);
+const rows = await getConversationMessages(activeConversation.id);
+const mapped = Array.isArray(rows) ? rows.map(toMessage) : [];
 
-      const assistantMsg: Message = {
-          id: uid(),
-          role: "assistant",
-          content: typeof resp.answer === "string" ? resp.answer : "后端未返回有效回答。",
-          createdAt: now(),
-          intent: resp.intent,
-          entity: resp.entity,
-          references: Array.isArray(resp.references) ? resp.references : [],
-          reference_items: Array.isArray(resp.reference_items) ? resp.reference_items : [],
-        };
-
-      updateConversation(activeConversation.id, (old) => ({
-        ...old,
-        title:
-          typeof resp.title === "string" && resp.title.trim().length > 0
-            ? resp.title.trim()
-            : old.title,
-        theme: themeName.trim() || old.theme,
-        updatedAt: now(),
-        messages: [...old.messages, assistantMsg],
-      }));
+setConversations((prev) =>
+  prev.map((c) =>
+    c.id === activeConversation.id
+      ? {
+          ...c,
+          title:
+            typeof resp.title === "string" && resp.title.trim().length > 0
+              ? resp.title.trim()
+              : c.title,
+          updatedAt: now(),
+          messages: mapped,
+        }
+      : c
+  )
+);
     } catch (error) {
       console.error("send() crashed:", error);
 
@@ -560,10 +645,7 @@ if (!isAuthenticated) {
                   >
                     <button
                       className="conversation-main"
-                      onClick={() => {
-                        setActiveId(c.id);
-                        setSidebarOpen(false);
-                      }}
+                      onClick={() => openConversation(c.id)}
                     >
                       <div className="conversation-title">{c.title}</div>
                       <div className="conversation-theme">{c.theme}</div>

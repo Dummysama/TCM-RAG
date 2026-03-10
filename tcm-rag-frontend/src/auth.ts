@@ -65,3 +65,25 @@ export async function login(username: string, password: string) {
 export async function getMe() {
   return apiFetch("/api/me");
 }
+
+export async function getConversations() {
+  return apiFetch("/api/conversations");
+}
+
+export async function createConversationApi(title = "新会话") {
+  return apiFetch("/api/conversations", {
+    method: "POST",
+    body: JSON.stringify({ title }),
+  });
+}
+
+export async function getConversationMessages(conversationId: number) {
+  return apiFetch(`/api/conversations/${conversationId}/messages`);
+}
+
+export async function askInConversation(conversationId: number, question: string) {
+  return apiFetch(`/api/conversations/${conversationId}/ask`, {
+    method: "POST",
+    body: JSON.stringify({ question }),
+  });
+}
