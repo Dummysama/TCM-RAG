@@ -51,7 +51,21 @@ class AskResponse(BaseModel):
     entity: Optional[str] = None
     references: List[str] = []
     title: Optional[str] = None
+    reference_items: List[Dict[str, Any]] = []
 
+class HerbDetailResponse(BaseModel):
+    id: str
+    name: Optional[str] = None
+    pinyin: Optional[str] = None
+    latin_name: Optional[str] = None
+    english_name: Optional[str] = None
+    nature: Optional[str] = None
+    flavor: Optional[str] = None
+    meridian: Optional[str] = None
+    effects: Optional[str] = None
+    indications: Optional[str] = None
+    alias: Optional[str] = None
+    raw_text: str = ""
 
 meta_cache: List[Dict[str, Any]] = []
 index_cache = None
@@ -245,6 +259,61 @@ def generate_conversation_title(question: str, answer: str = "") -> str:
 
     return "中医药主题问答"
 
+def build_reference_items(evidence_blocks: List[Dict[str, str]], meta: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """
+    把 evidence id 转成更适合前端展示的 reference_items
+    """
+    meta_map = {it.get("id"): it for it in meta}
+    result = []
+
+    for e in evidence_blocks:
+        iid = e.get("id")
+        typ = e.get("type")
+        item = meta_map.get(iid, {})
+        md = item.get("metadata") or {}
+
+        name = md.get("name")
+        if not name:
+            # 兜底：从文本里提取“中药名称”
+            text = item.get("text", "") or ""
+            m = re.search(r"中药名称[:：]\s*(.+)", text)
+            if m:
+                name = m.group(1).strip()
+
+        result.append({
+            "id": iid,
+            "type": typ,
+            "name": name or iid,
+        })
+
+    return result
+
+
+def parse_herb_detail(item: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    从 herb chunk 的 text 中解析详情字段
+    """
+    text = item.get("text", "") or ""
+    md = item.get("metadata") or {}
+
+    def extract(label: str) -> Optional[str]:
+        m = re.search(rf"{label}[:：]\s*(.+)", text)
+        return m.group(1).strip() if m else None
+
+    return {
+        "id": item.get("id", ""),
+        "name": md.get("name") or extract("中药名称"),
+        "pinyin": extract("拼音"),
+        "latin_name": extract("拉丁名"),
+        "english_name": extract("英文名"),
+        "nature": extract("性"),
+        "flavor": extract("味"),
+        "meridian": extract("归经"),
+        "effects": extract("功效"),
+        "indications": extract("主治/适应证") or extract("主治") or extract("适应证"),
+        "alias": extract("别名"),
+        "raw_text": text,
+    }
 
 def run_rag(question: str) -> Dict[str, Any]:
     emergency_msg = detect_emergency(question)
@@ -255,6 +324,7 @@ def run_rag(question: str) -> Dict[str, Any]:
             "entity": None,
             "references": [],
             "title": generate_conversation_title(question),
+            "reference_items": [],
         }
 
     parsed = preprocess_query_llm(question)
@@ -281,6 +351,7 @@ def run_rag(question: str) -> Dict[str, Any]:
                 "entity": entity,
                 "references": [],
                 "title": generate_conversation_title(question),
+                "reference_items": [],
             }
 
     evidence_items: List[Dict[str, Any]] = []
@@ -337,6 +408,7 @@ def run_rag(question: str) -> Dict[str, Any]:
             "entity": entity,
             "references": [],
             "title": generate_conversation_title(question),
+            "reference_items": [],
         }
 
     if not evidence_items:
@@ -346,6 +418,7 @@ def run_rag(question: str) -> Dict[str, Any]:
             "entity": entity,
             "references": [],
             "title": generate_conversation_title(question),
+            "reference_items": [],
         }
 
     evidence_blocks = to_evidence(
@@ -356,6 +429,7 @@ def run_rag(question: str) -> Dict[str, Any]:
 
     answer = generate_answer_cn(question, evidence_blocks)
     refs = [x["id"] for x in evidence_blocks]
+    reference_items = build_reference_items(evidence_blocks, meta_cache)
 
     return {
         "answer": answer,
@@ -363,6 +437,7 @@ def run_rag(question: str) -> Dict[str, Any]:
         "entity": entity,
         "references": refs,
         "title": generate_conversation_title(question, answer),
+        "reference_items": reference_items,
     }
 
 
@@ -375,3 +450,18 @@ def root():
 def ask(req: AskRequest):
     result = run_rag(req.question)
     return AskResponse(**result)
+
+@app.get("/api/herb/{herb_id}", response_model=HerbDetailResponse)
+def get_herb_detail(herb_id: str):
+    full_id = herb_id if herb_id.startswith("herb::") else f"herb::{herb_id}"
+
+    for it in meta_cache:
+        if it.get("id") == full_id and it.get("type") == "herb":
+            detail = parse_herb_detail(it)
+            return HerbDetailResponse(**detail)
+
+    return HerbDetailResponse(
+        id=herb_id,
+        name="未找到该中药",
+        raw_text=""
+    )

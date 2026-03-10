@@ -384,3 +384,88 @@ textarea {
 ::-webkit-scrollbar-track {
   background: transparent;
 }
+
+@media (max-width: 768px) {
+
+  .sidebar {
+    width: 100%;
+    position: fixed;
+    z-index: 10;
+  }
+
+  .chat-container {
+    margin-left: 0;
+  }
+
+}
+
+@media (max-width: 768px) {
+
+  .input-area {
+    position: fixed;
+    bottom: 0;
+    width: 100%;
+  }
+
+}
+
+.badge-clickable {
+  cursor: pointer;
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.badge-clickable:hover {
+  background: rgba(61, 116, 255, 0.18);
+  border-color: rgba(61, 116, 255, 0.4);
+}
+
+.detail-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 9999;
+  padding: 20px;
+}
+
+.detail-modal {
+  position: relative;
+  width: min(680px, 92vw);
+  max-height: 82vh;
+  overflow-y: auto;
+  background: #0f1a33;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 18px;
+  padding: 24px 22px 20px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.35);
+}
+
+.detail-close {
+  position: absolute;
+  right: 14px;
+  top: 12px;
+  border: none;
+  background: transparent;
+  color: #dfe7f3;
+  font-size: 24px;
+  cursor: pointer;
+}
+
+.detail-loading {
+  font-size: 14px;
+  color: #c9d4e5;
+}
+
+.detail-content h3 {
+  margin: 0 0 14px;
+  font-size: 22px;
+  color: #eef4ff;
+}
+
+.detail-content p {
+  margin: 0 0 10px;
+  line-height: 1.7;
+  color: #d8e3f2;
+}

@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { motion } from "framer-motion";
 import { Plus, Search, Trash2, Send, Edit3, PanelLeftClose, PanelLeftOpen } from "lucide-react";
 import "./index.css";
@@ -13,6 +13,7 @@ type Message = {
   intent?: string;
   entity?: string | null;
   references?: string[];
+  reference_items?: { id: string; type?: string; name: string }[];
 };
 
 type Conversation = {
@@ -30,6 +31,22 @@ type AskResponse = {
   entity?: string | null;
   references?: string[];
   title?: string;
+  reference_items?: { id: string; type?: string; name: string }[];
+};
+
+type HerbDetail = {
+  id: string;
+  name?: string;
+  pinyin?: string;
+  latin_name?: string;
+  english_name?: string;
+  nature?: string;
+  flavor?: string;
+  meridian?: string;
+  effects?: string;
+  indications?: string;
+  alias?: string;
+  raw_text?: string;
 };
 
 const STORAGE_KEY = "tcm_rag_frontend_state_stable_v1";
@@ -87,7 +104,7 @@ function summarizeTitle(input: string) {
 
 const apiClient = {
   async ask(question: string, conversation: Conversation): Promise<AskResponse> {
-    const res = await fetch("http://127.0.0.1:8000/api/ask", {
+    const res = await fetch("/api/ask", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -106,9 +123,24 @@ const apiClient = {
 
     return await res.json();
   },
+
+  async getHerbDetail(id: string): Promise<HerbDetail> {
+    const herbId = id.startsWith("herb::") ? id.replace("herb::", "") : id;
+    const res = await fetch(`/api/herb/${herbId}`);
+    if (!res.ok) {
+      throw new Error(`中药详情请求失败: ${res.status}`);
+    }
+    return await res.json();
+  },
 };
 
-function MessageBubble({ message }: { message: Message }) {
+function MessageBubble({
+  message,
+  onOpenHerbDetail,
+}: {
+  message: Message;
+  onOpenHerbDetail: (id: string) => void;
+}) {
   const isUser = message.role === "user";
 
   return (
@@ -128,15 +160,30 @@ function MessageBubble({ message }: { message: Message }) {
               {message.entity ? <span className="badge badge-outline">entity: {message.entity}</span> : null}
             </div>
 
-            {message.references?.length ? (
-              <div className="message-badges">
-                {message.references.map((ref) => (
-                  <span key={ref} className="badge badge-outline">
-                    {ref}
-                  </span>
-                ))}
-              </div>
-            ) : null}
+            {message.reference_items?.length ? (
+                  <div className="message-badges">
+                    {message.reference_items
+                      .filter((item) => item.type === "herb")
+                      .map((item) => (
+                        <button
+                          key={item.id}
+                          className="badge badge-outline badge-clickable"
+                          onClick={() => onOpenHerbDetail(item.id)}
+                          type="button"
+                        >
+                          {item.name}
+                        </button>
+                      ))}
+                  </div>
+                ) : message.references?.length ? (
+                  <div className="message-badges">
+                    {message.references.map((ref) => (
+                      <span key={ref} className="badge badge-outline">
+                        {ref}
+                      </span>
+                    ))}
+                  </div>
+                ) : null}
           </div>
         ) : null}
       </div>
@@ -154,7 +201,29 @@ export default function App() {
   const [sending, setSending] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(true);
 
+  const [detailOpen, setDetailOpen] = useState(false);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [herbDetail, setHerbDetail] = useState<HerbDetail | null>(null);
+
   const endRef = useRef<HTMLDivElement | null>(null);
+
+  const openHerbDetail = async (id: string) => {
+  try {
+    setDetailOpen(true);
+    setDetailLoading(true);
+    const detail = await apiClient.getHerbDetail(id);
+    setHerbDetail(detail);
+  } catch (error) {
+    console.error("openHerbDetail crashed:", error);
+    setHerbDetail({
+      id,
+      name: "详情加载失败",
+      raw_text: "",
+    });
+  } finally {
+    setDetailLoading(false);
+  }
+};
 
   const activeConversation = useMemo(
     () => conversations.find((c) => c.id === activeId) ?? conversations[0] ?? null,
@@ -248,14 +317,15 @@ export default function App() {
       const resp = await apiClient.ask(userText, latestConv);
 
       const assistantMsg: Message = {
-        id: uid(),
-        role: "assistant",
-        content: typeof resp.answer === "string" ? resp.answer : "后端未返回有效回答。",
-        createdAt: now(),
-        intent: resp.intent,
-        entity: resp.entity,
-        references: Array.isArray(resp.references) ? resp.references : [],
-      };
+          id: uid(),
+          role: "assistant",
+          content: typeof resp.answer === "string" ? resp.answer : "后端未返回有效回答。",
+          createdAt: now(),
+          intent: resp.intent,
+          entity: resp.entity,
+          references: Array.isArray(resp.references) ? resp.references : [],
+          reference_items: Array.isArray(resp.reference_items) ? resp.reference_items : [],
+        };
 
       updateConversation(activeConversation.id, (old) => ({
         ...old,
@@ -349,8 +419,12 @@ export default function App() {
           <section className="messages-panel">
             <div className="messages">
               {activeConversation.messages.map((m) => (
-                <MessageBubble key={m.id} message={m} />
-              ))}
+                  <MessageBubble
+                    key={m.id}
+                    message={m}
+                    onOpenHerbDetail={openHerbDetail}
+                  />
+                ))}
 
               {sending ? (
                 <div className="message-row message-row-assistant">
@@ -389,6 +463,34 @@ export default function App() {
           </section>
         </main>
       </div>
+    {detailOpen ? (
+          <div className="detail-overlay" onClick={() => setDetailOpen(false)}>
+            <div className="detail-modal" onClick={(e) => e.stopPropagation()}>
+              <button className="detail-close" onClick={() => setDetailOpen(false)}>
+                ×
+              </button>
+
+              {detailLoading ? (
+                <div className="detail-loading">正在加载中药详情...</div>
+              ) : herbDetail ? (
+                <div className="detail-content">
+                  <h3>{herbDetail.name || "中药详情"}</h3>
+                  {herbDetail.pinyin ? <p><strong>拼音：</strong>{herbDetail.pinyin}</p> : null}
+                  {herbDetail.latin_name ? <p><strong>拉丁名：</strong>{herbDetail.latin_name}</p> : null}
+                  {herbDetail.english_name ? <p><strong>英文名：</strong>{herbDetail.english_name}</p> : null}
+                  {herbDetail.alias ? <p><strong>别名：</strong>{herbDetail.alias}</p> : null}
+                  {herbDetail.nature ? <p><strong>性：</strong>{herbDetail.nature}</p> : null}
+                  {herbDetail.flavor ? <p><strong>味：</strong>{herbDetail.flavor}</p> : null}
+                  {herbDetail.meridian ? <p><strong>归经：</strong>{herbDetail.meridian}</p> : null}
+                  {herbDetail.effects ? <p><strong>功效：</strong>{herbDetail.effects}</p> : null}
+                  {herbDetail.indications ? <p><strong>主治：</strong>{herbDetail.indications}</p> : null}
+                </div>
+              ) : (
+                <div className="detail-loading">暂无详情</div>
+              )}
+            </div>
+          </div>
+        ) : null}
     </div>
   );
 }
