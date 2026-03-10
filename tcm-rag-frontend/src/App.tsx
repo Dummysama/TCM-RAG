@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { motion } from "framer-motion";
 import { Plus, Search, Trash2, Send, Edit3, PanelLeftClose, PanelLeftOpen } from "lucide-react";
 import "./index.css";
+import { clearToken, getMe, login, register, setToken } from "./auth";
 
 type Role = "user" | "assistant";
 
@@ -66,36 +67,22 @@ function buildConversation(title = "新主题会话", theme = "默认主题"): C
       {
         id: uid(),
         role: "assistant",
-        content: "你好，这里是中医药 RAG 问答界面。",
+        content: "你好，这里是中医药 RAG 问答平台。",
         createdAt: t,
       },
     ],
   };
 }
 
+function buildInitialConversations(): Conversation[] {
+  return [buildConversation()];
+}
+
 function saveState(conversations: Conversation[], activeId: string | null) {
   localStorage.setItem(STORAGE_KEY, JSON.stringify({ conversations, activeId }));
 }
 
-function loadState(): { conversations: Conversation[]; activeId: string | null } {
-  const raw = localStorage.getItem(STORAGE_KEY);
-  if (!raw) {
-    const seed = buildConversation();
-    return { conversations: [seed], activeId: seed.id };
-  }
 
-  try {
-    const parsed = JSON.parse(raw);
-    if (!parsed?.conversations?.length) {
-      const seed = buildConversation();
-      return { conversations: [seed], activeId: seed.id };
-    }
-    return parsed;
-  } catch {
-    const seed = buildConversation();
-    return { conversations: [seed], activeId: seed.id };
-  }
-}
 
 function summarizeTitle(input: string) {
   const clean = input.replace(/\s+/g, " ").trim();
@@ -192,20 +179,109 @@ function MessageBubble({
 }
 
 export default function App() {
-  const initial = useMemo(() => loadState(), []);
-  const [conversations, setConversations] = useState<Conversation[]>(initial.conversations);
-  const [activeId, setActiveId] = useState<string | null>(initial.activeId);
+
+  const initialConversations = buildInitialConversations();
+
+  const [conversations, setConversations] = useState<Conversation[]>(initialConversations);
+  const [activeId, setActiveId] = useState<string>(initialConversations[0].id);
   const [query, setQuery] = useState("");
   const [themeName, setThemeName] = useState("默认主题");
   const [search, setSearch] = useState("");
   const [sending, setSending] = useState(false);
-  const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
 
   const [detailOpen, setDetailOpen] = useState(false);
   const [detailLoading, setDetailLoading] = useState(false);
   const [herbDetail, setHerbDetail] = useState<HerbDetail | null>(null);
 
+  const [authMode, setAuthMode] = useState<"login" | "register">("login");
+  const [authLoading, setAuthLoading] = useState(true);
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [currentUser, setCurrentUser] = useState<{ id: number; username: string } | null>(null);
+
+  const [authUsername, setAuthUsername] = useState("");
+  const [authPassword, setAuthPassword] = useState("");
+  const [authError, setAuthError] = useState("");
+
+
+
+
   const endRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+  if (window.innerWidth <= 768) {
+    document.body.style.overflow = sidebarOpen ? "hidden" : "";
+  }
+  return () => {
+    document.body.style.overflow = "";
+  };
+}, [sidebarOpen]);
+
+    useEffect(() => {
+      const bootstrapAuth = async () => {
+        try {
+          const me = await getMe();
+          setCurrentUser(me);
+          setIsAuthenticated(true);
+        } catch {
+          setIsAuthenticated(false);
+          setCurrentUser(null);
+        } finally {
+          setAuthLoading(false);
+        }
+      };
+
+      bootstrapAuth();
+    }, []);
+
+    const handleAuthSubmit = async () => {
+      const username = authUsername.trim();
+      const password = authPassword.trim();
+
+      if (!username || !password) {
+        setAuthError("用户名和密码不能为空");
+        return;
+      }
+
+      try {
+        setAuthError("");
+
+        if (authMode === "register") {
+          await register(username, password);
+        }
+
+        const loginResp = await login(username, password);
+        setToken(loginResp.access_token);
+
+        const me = await getMe();
+        setCurrentUser(me);
+        setIsAuthenticated(true);
+
+        // 登录成功后先重置为干净页面，避免继续显示未登录时的本地记录
+        const fresh = buildInitialConversations();
+        setConversations(fresh);
+        setActiveId(fresh[0].id);
+        setQuery("");
+        setSearch("");
+
+        setAuthUsername("");
+        setAuthPassword("");
+      } catch (error: any) {
+        setAuthError(error.message || "操作失败");
+      }
+    };
+
+    const handleLogout = () => {
+      clearToken();
+      setIsAuthenticated(false);
+      setCurrentUser(null);
+
+      // 清空当前前端本地聊天状态，避免不同账户看到旧记录
+      const fresh = buildInitialConversations();
+      setConversations(fresh);
+      setActiveId(fresh[0].id);
+      setQuery("");
+      setSearch("");
+    };
 
   const openHerbDetail = async (id: string) => {
   try {
@@ -259,6 +335,7 @@ export default function App() {
     const conv = buildConversation(title, themeName.trim() || "默认主题");
     setConversations((prev) => [conv, ...prev]);
     setActiveId(conv.id);
+    setSidebarOpen(false);
   };
 
   const deleteConversation = (id: string) => {
@@ -363,57 +440,162 @@ export default function App() {
     return <div style={{ color: "white", padding: 20 }}>当前没有可用会话。</div>;
   }
 
+if (authLoading) {
+  return (
+    <div className="auth-page">
+      <div className="auth-card">
+        <h2>正在验证登录状态...</h2>
+      </div>
+    </div>
+  );
+}
+
+if (!isAuthenticated) {
+  return (
+    <div className="auth-page">
+      <div className="auth-card">
+        <h1>TCM-RAG</h1>
+        <p className="auth-subtitle">登录后即可保存个人咨询记录</p>
+
+        <div className="auth-tabs">
+          <button
+            className={`auth-tab ${authMode === "login" ? "active" : ""}`}
+            onClick={() => setAuthMode("login")}
+          >
+            登录
+          </button>
+          <button
+            className={`auth-tab ${authMode === "register" ? "active" : ""}`}
+            onClick={() => setAuthMode("register")}
+          >
+            注册
+          </button>
+        </div>
+
+        <input
+          className="auth-input"
+          value={authUsername}
+          onChange={(e) => setAuthUsername(e.target.value)}
+          placeholder="请输入用户名"
+        />
+
+        <input
+          className="auth-input"
+          type="password"
+          value={authPassword}
+          onChange={(e) => setAuthPassword(e.target.value)}
+          placeholder="请输入密码"
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              handleAuthSubmit();
+            }
+          }}
+        />
+
+        {authError ? <div className="auth-error">{authError}</div> : null}
+
+        <button className="auth-submit" onClick={handleAuthSubmit}>
+          {authMode === "login" ? "登录" : "注册并登录"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
   return (
     <div className="app-shell">
       <header className="topbar">
-        <button className="icon-toggle" onClick={() => setSidebarOpen((v) => !v)}>
-          {sidebarOpen ? <PanelLeftClose size={18} /> : <PanelLeftOpen size={18} />}
-        </button>
-        <div className="topbar-title">{activeConversation.title}</div>
-      </header>
+          <button className="icon-toggle" onClick={() => setSidebarOpen((v) => !v)}>
+            {sidebarOpen ? <PanelLeftClose size={18} /> : <PanelLeftOpen size={18} />}
+          </button>
+
+          <div className="topbar-title">{activeConversation.title}</div>
+
+          <div className="topbar-user">
+              <div className="avatar">
+                {currentUser?.username?.[0]?.toUpperCase()}
+              </div>
+
+              <span className="topbar-username">
+                {currentUser?.username}
+              </span>
+
+              <button className="logout-btn" onClick={handleLogout}>
+                退出
+              </button>
+            </div>
+        </header>
+
+
 
       <div className="layout">
-        <aside className={`sidebar ${sidebarOpen ? "open" : "closed"}`}>
-          <div className="sidebar-inner">
-            <button className="btn btn-primary new-btn" onClick={createConversation}>
-              <Plus size={16} />
-              新建会话
-            </button>
+        <>
+          <aside className={`sidebar ${sidebarOpen ? "sidebar-open" : ""}`}>
+            <div className="sidebar-inner">
+              <button
+                className="btn btn-primary new-btn"
+                onClick={() => {
+                  createConversation();
+                  setSidebarOpen(false);
+                }}
+              >
+                <Plus size={16} />
+                新建会话
+              </button>
 
-            <div className="search-box">
-              <Search size={15} />
-              <input
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                placeholder="搜索会话"
-              />
-            </div>
+              <div className="search-box">
+                <Search size={15} />
+                <input
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  placeholder="搜索会话"
+                />
+              </div>
 
-
-            <div className="conversation-list">
-              {filteredConversations.map((c) => (
-                <div
-                  key={c.id}
-                  className={`conversation-item ${c.id === activeConversation.id ? "active" : ""}`}
-                >
-                  <button className="conversation-main" onClick={() => setActiveId(c.id)}>
-                    <div className="conversation-title">{c.title}</div>
-                    <div className="conversation-theme">{c.theme}</div>
-                  </button>
-
-                  <div className="conversation-actions">
-                    <button className="btn btn-light btn-small" onClick={() => renameConversation(c.id)}>
-                      <Edit3 size={13} />
+              <div className="conversation-list">
+                {filteredConversations.map((c) => (
+                  <div
+                    key={c.id}
+                    className={`conversation-item ${c.id === activeConversation.id ? "active" : ""}`}
+                  >
+                    <button
+                      className="conversation-main"
+                      onClick={() => {
+                        setActiveId(c.id);
+                        setSidebarOpen(false);
+                      }}
+                    >
+                      <div className="conversation-title">{c.title}</div>
+                      <div className="conversation-theme">{c.theme}</div>
                     </button>
-                    <button className="btn btn-light btn-small" onClick={() => deleteConversation(c.id)}>
-                      <Trash2 size={13} />
-                    </button>
+
+                    <div className="conversation-actions">
+                      <button
+                        className="btn btn-light btn-small"
+                        onClick={() => renameConversation(c.id)}
+                      >
+                        <Edit3 size={13} />
+                      </button>
+                      <button
+                        className="btn btn-light btn-small"
+                        onClick={() => deleteConversation(c.id)}
+                      >
+                        <Trash2 size={13} />
+                      </button>
+                    </div>
                   </div>
-                </div>
-              ))}
+                ))}
+              </div>
             </div>
-          </div>
-        </aside>
+          </aside>
+
+          {sidebarOpen ? (
+            <div
+              className="sidebar-backdrop"
+              onClick={() => setSidebarOpen(false)}
+            />
+          ) : null}
+        </>
 
         <main className="main">
           <section className="messages-panel">

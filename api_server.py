@@ -5,7 +5,12 @@ import re
 from pathlib import Path
 from typing import List, Dict, Any, Optional, Tuple
 
+SECRET_KEY = "your-secret-key"
+ALGORITHM = "HS256"
+ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24
+
 import faiss
+from jose import jwt
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -16,10 +21,41 @@ from entity_validator import validate_entity
 from llm_client import generate_answer_cn
 from llm_preprocess import preprocess_query_llm
 
+from fastapi.staticfiles import StaticFiles
+
+from fastapi import Depends, HTTPException, Header
+from sqlalchemy.orm import Session
+
+
+from database import Base, engine, get_db
+from models import User
+from schemas import RegisterRequest, LoginRequest, TokenResponse, UserInfo
+from auth import (
+    hash_password,
+    verify_password,
+    create_access_token,
+    decode_access_token,
+    get_user_by_username, SECRET_KEY, ALGORITHM,
+)
+
+import json
+from datetime import datetime
+
+from models import User, Conversation, Message
+from schemas import (
+    RegisterRequest,
+    LoginRequest,
+    TokenResponse,
+    UserInfo,
+    ConversationCreateRequest,
+    ConversationItem,
+    MessageItem,
+    AskInConversationRequest,
+)
 
 INDEX_PATH = Path("outputs/index/faiss.index")
 META_PATH = Path("outputs/index/meta.jsonl")
-EMBED_MODEL = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+EMBED_MODEL = "models/paraphrase-multilingual-MiniLM-L12-v2"
 
 TOP_K_ENTITY = 6
 REC_VEC_CANDIDATES = 140
@@ -82,6 +118,7 @@ def load_meta() -> List[Dict[str, Any]]:
 
 @app.on_event("startup")
 def startup_event():
+    Base.metadata.create_all(bind=engine)
     global meta_cache, index_cache, model_cache
     print("Loading FAISS index, metadata, and embedding model...")
     meta_cache = load_meta()
@@ -440,10 +477,180 @@ def run_rag(question: str) -> Dict[str, Any]:
         "reference_items": reference_items,
     }
 
+def get_current_user(
+    authorization: str = Header(None),
+    db: Session = Depends(get_db)
+):
+    if not authorization:
+        raise HTTPException(status_code=401, detail="未登录或令牌缺失")
 
-@app.get("/")
-def root():
-    return {"message": "TCM-RAG API is running."}
+    token = authorization.replace("Bearer ", "")
+
+    payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+
+    user_id = payload.get("sub")
+
+    user = db.query(User).filter(User.id == int(user_id)).first()
+
+    if not user:
+        raise HTTPException(status_code=401, detail="用户不存在")
+
+    return user
+
+@app.post("/api/register", response_model=UserInfo)
+def register(payload: RegisterRequest, db: Session = Depends(get_db)):
+    username = payload.username.strip()
+
+    if not username:
+        raise HTTPException(status_code=400, detail="用户名不能为空")
+
+    existing = get_user_by_username(db, username)
+    if existing:
+        raise HTTPException(status_code=400, detail="用户名已存在")
+
+    user = User(
+        username=username,
+        password_hash=hash_password(payload.password),
+    )
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+
+    return user
+
+@app.post("/api/login", response_model=TokenResponse)
+def login(payload: LoginRequest, db: Session = Depends(get_db)):
+    username = payload.username.strip()
+    user = get_user_by_username(db, username)
+
+    if not user or not verify_password(payload.password, user.password_hash):
+        raise HTTPException(status_code=401, detail="用户名或密码错误")
+
+    access_token = create_access_token(user.id, user.username)
+    return TokenResponse(access_token=access_token)
+
+@app.get("/api/me")
+def get_me(user=Depends(get_current_user)):
+    return {
+        "id": user.id,
+        "username": user.username
+    }
+
+#当前会话列表
+@app.get("/api/conversations", response_model=list[ConversationItem])
+def list_conversations(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    rows = (
+        db.query(Conversation)
+        .filter(Conversation.user_id == current_user.id)
+        .order_by(Conversation.updated_at.desc())
+        .all()
+    )
+    return rows
+
+#创建会话
+@app.post("/api/conversations", response_model=ConversationItem)
+def create_conversation_api(
+    payload: ConversationCreateRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    title = (payload.title or "新会话").strip() or "新会话"
+
+    row = Conversation(
+        user_id=current_user.id,
+        title=title,
+        created_at=datetime.utcnow(),
+        updated_at=datetime.utcnow(),
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return row
+
+#获取某个会话的消息列表
+@app.get("/api/conversations/{conversation_id}/messages", response_model=list[MessageItem])
+def get_conversation_messages(
+    conversation_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    conv = (
+        db.query(Conversation)
+        .filter(
+            Conversation.id == conversation_id,
+            Conversation.user_id == current_user.id,
+        )
+        .first()
+    )
+    if not conv:
+        raise HTTPException(status_code=404, detail="会话不存在")
+
+    rows = (
+        db.query(Message)
+        .filter(Message.conversation_id == conversation_id)
+        .order_by(Message.created_at.asc())
+        .all()
+    )
+    return rows
+
+@app.post("/api/conversations/{conversation_id}/ask")
+def ask_in_conversation(
+    conversation_id: int,
+    payload: AskInConversationRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    conv = (
+        db.query(Conversation)
+        .filter(
+            Conversation.id == conversation_id,
+            Conversation.user_id == current_user.id,
+        )
+        .first()
+    )
+    if not conv:
+        raise HTTPException(status_code=404, detail="会话不存在")
+
+    question = payload.question.strip()
+    if not question:
+        raise HTTPException(status_code=400, detail="问题不能为空")
+
+    # 调用你现有的 RAG 主流程
+    result = run_rag(question)
+
+    # 保存用户消息
+    user_msg = Message(
+        conversation_id=conversation_id,
+        role="user",
+        content=question,
+        created_at=datetime.utcnow(),
+    )
+    db.add(user_msg)
+
+    # 保存助手消息
+    assistant_msg = Message(
+        conversation_id=conversation_id,
+        role="assistant",
+        content=result.get("answer", ""),
+        intent=result.get("intent"),
+        entity=result.get("entity"),
+        references_json=json.dumps(result.get("references", []), ensure_ascii=False),
+        created_at=datetime.utcnow(),
+    )
+    db.add(assistant_msg)
+
+    # 如果当前会话标题还是默认值，可以用结果里的 title 更新
+    if conv.title in ("新会话", "默认主题") and result.get("title"):
+        conv.title = result["title"]
+
+    conv.updated_at = datetime.utcnow()
+
+    db.commit()
+
+    return result
 
 
 @app.post("/api/ask", response_model=AskResponse)
@@ -465,3 +672,5 @@ def get_herb_detail(herb_id: str):
         name="未找到该中药",
         raw_text=""
     )
+
+app.mount("/", StaticFiles(directory="tcm-rag-frontend/dist", html=True), name="frontend")

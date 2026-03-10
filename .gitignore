@@ -1,2 +1,6 @@
 # secrets
-deepseek_secrets.py
+deepseek_secrets.py__pycache__/
+*.pyc
+.venv/
+tcm_rag.db
+models/
