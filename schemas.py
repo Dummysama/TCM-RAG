@@ -50,6 +50,7 @@ class MessageItem(BaseModel):
     intent: Optional[str] = None
     entity: Optional[str] = None
     references_json: Optional[str] = None
+    reference_items_json: Optional[str] = None
     created_at: datetime
 
     class Config:

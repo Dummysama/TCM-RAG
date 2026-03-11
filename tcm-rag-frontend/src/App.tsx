@@ -60,9 +60,118 @@ type HerbDetail = {
   raw_text?: string;
 };
 
+type PrescriptionDetail = {
+  id: string;
+  name?: string;
+  pinyin?: string;
+  source?: string;
+  composition?: string;
+  effects?: string;
+  indications?: string;
+  raw_text?: string;
+};
+
 
 const uid = () => Math.random().toString(36).slice(2, 10);
 const now = () => new Date().toISOString();
+
+function normalizeHerbId(raw: string): string {
+  let id = raw.trim();
+
+  if (id.startsWith("herb::")) {
+    id = id.replace("herb::", "");
+  }
+
+  if (/^\d+$/.test(id)) {
+    id = `HERB_${id}`;
+  }
+
+  return id;
+}
+
+function normalizeReferenceItems(
+  referenceItems: any[] | undefined,
+  references: string[] | undefined
+) {
+  const result: Array<{ id: string; type: string; name: string }> = [];
+
+  // 1. 优先使用后端已经返回的 reference_items
+  if (Array.isArray(referenceItems) && referenceItems.length > 0) {
+    for (const item of referenceItems) {
+      if (!item) continue;
+
+      // 后端已经是对象
+      if (typeof item === "object") {
+        const rawId = String(item.id ?? "");
+        const rawType = String(item.type ?? "");
+        const rawName = String(item.name ?? "");
+
+        if (rawType === "herb") {
+          result.push({
+            id: normalizeHerbId(rawId),
+            type: "herb",
+            name: rawName || normalizeHerbId(rawId),
+          });
+        } else {
+          result.push({
+            id: rawId,
+            type: rawType || "unknown",
+            name: rawName || rawId,
+          });
+        }
+      }
+
+      // 后端如果直接返回字符串
+      if (typeof item === "string") {
+        if (item.startsWith("herb::")) {
+          const herbId = normalizeHerbId(item);
+          result.push({
+            id: herbId,
+            type: "herb",
+            name: herbId,
+          });
+        } else if (item.startsWith("prescription::")) {
+          const pid = item.replace("prescription::", "");
+          result.push({
+            id: pid,
+            type: "prescription",
+            name: pid,
+          });
+        }
+      }
+    }
+  }
+
+  // 2. 如果 reference_items 没有，就从 references 兜底生成
+  if (result.length === 0 && Array.isArray(references)) {
+    for (const ref of references) {
+      if (typeof ref !== "string") continue;
+
+      if (ref.startsWith("HERB_")) {
+        result.push({
+          id: normalizeHerbId(ref),
+          type: "herb",
+          name: ref,
+        });
+      } else if (ref.startsWith("herb::HERB_")) {
+        const herbId = normalizeHerbId(ref);
+        result.push({
+          id: herbId,
+          type: "herb",
+          name: herbId,
+        });
+      } else if (ref.startsWith("Prescription")) {
+        result.push({
+          id: ref,
+          type: "prescription",
+          name: ref,
+        });
+      }
+    }
+  }
+
+  return result;
+}
 
 function buildConversation(title = "新主题会话", theme = "默认主题"): Conversation {
   const t = now();
@@ -106,6 +215,15 @@ function toMessage(raw: any): Message {
     references = [];
   }
 
+  let referenceItems: any[] = [];
+  try {
+    referenceItems = raw.reference_items_json
+      ? JSON.parse(raw.reference_items_json)
+      : [];
+  } catch {
+    referenceItems = [];
+  }
+
   return {
     id: String(raw.id),
     role: raw.role,
@@ -114,10 +232,9 @@ function toMessage(raw: any): Message {
     intent: raw.intent,
     entity: raw.entity,
     references,
-    reference_items: [],
+    reference_items: normalizeReferenceItems(referenceItems, references),
   };
 }
-
 
 
 function summarizeTitle(input: string) {
@@ -147,66 +264,140 @@ const apiClient = {
     return await res.json();
   },
 
-  async getHerbDetail(id: string): Promise<HerbDetail> {
-    const herbId = id.startsWith("herb::") ? id.replace("herb::", "") : id;
-    const res = await fetch(`/api/herb/${herbId}`);
-    if (!res.ok) {
-      throw new Error(`中药详情请求失败: ${res.status}`);
-    }
-    return await res.json();
-  },
+async getHerbDetail(id: string): Promise<HerbDetail> {
+  const herbId = normalizeHerbId(id);
+
+  const res = await fetch(`/api/herb/${herbId}`);
+  if (!res.ok) {
+    throw new Error(`中药详情请求失败: ${res.status}`);
+  }
+  return await res.json();
+},
+
+async getPrescriptionDetail(id: string): Promise<PrescriptionDetail> {
+  let pid = id.trim();
+
+  if (pid.startsWith("prescription::")) {
+    pid = pid.replace("prescription::", "");
+  }
+
+  const res = await fetch(`/api/prescription/${pid}`);
+  if (!res.ok) {
+    throw new Error(`方剂详情请求失败: ${res.status}`);
+  }
+
+  return await res.json();
+},
 };
 
 function MessageBubble({
   message,
   onOpenHerbDetail,
+  onOpenPrescriptionDetail,
 }: {
   message: Message;
   onOpenHerbDetail: (id: string) => void;
+  onOpenPrescriptionDetail: (id: string) => void;
 }) {
   const isUser = message.role === "user";
 
   return (
     <motion.div
-      initial={{ opacity: 0, y: 6 }}
+      initial={{ opacity: 0, y: 8 }}
       animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.18 }}
+      transition={{ duration: 0.22 }}
       className={`message-row ${isUser ? "message-row-user" : "message-row-assistant"}`}
     >
       <div className={`message-bubble ${isUser ? "message-bubble-user" : "message-bubble-assistant"}`}>
         <div className="message-content">{message.content}</div>
 
-        {!isUser && (message.intent || message.entity || message.references?.length) ? (
-          <div className="message-meta">
+        {!isUser ? (
+          <div className="message-extra">
+
+
+            <div className="message-divider" />
+
             <div className="message-badges">
-              {message.intent ? <span className="badge">intent: {message.intent}</span> : null}
-              {message.entity ? <span className="badge badge-outline">entity: {message.entity}</span> : null}
+              {message.intent ? (
+                <span className="badge badge-primary">intent: {message.intent}</span>
+              ) : null}
+
+              {message.entity ? (
+                <span className="badge badge-outline">entity: {message.entity}</span>
+              ) : null}
             </div>
 
             {message.reference_items?.length ? (
-                  <div className="message-badges">
-                    {message.reference_items
-                      .filter((item) => item.type === "herb")
-                      .map((item) => (
-                        <button
-                          key={item.id}
-                          className="badge badge-outline badge-clickable"
-                          onClick={() => onOpenHerbDetail(item.id)}
-                          type="button"
-                        >
-                          {item.name}
-                        </button>
-                      ))}
-                  </div>
-                ) : message.references?.length ? (
-                  <div className="message-badges">
-                    {message.references.map((ref) => (
-                      <span key={ref} className="badge badge-outline">
-                        {ref}
-                      </span>
-                    ))}
-                  </div>
-                ) : null}
+              <div className="message-badges">
+                {message.reference_items.map((item) => {
+                  const isHerb = item.type === "herb";
+                  const isPrescription =
+                    item.type === "prescription" || item.type === "formula";
+
+                  if (isHerb) {
+                    return (
+                      <button
+                        key={`${item.type}-${item.id}`}
+                        className="badge badge-outline badge-clickable"
+                        onClick={() => onOpenHerbDetail(item.id)}
+                        type="button"
+                      >
+                        {item.name}
+                      </button>
+                    );
+                  }
+
+                  if (isPrescription) {
+                    return (
+                      <button
+                        key={`${item.type}-${item.id}`}
+                        className="badge badge-outline badge-clickable"
+                        onClick={() => onOpenPrescriptionDetail(item.id)}
+                        type="button"
+                      >
+                        {item.name}
+                      </button>
+                    );
+                  }
+
+                  return (
+                    <span
+                      key={`${item.type}-${item.id}`}
+                      className="badge badge-outline"
+                    >
+                      {item.name}
+                    </span>
+                  );
+                })}
+              </div>
+            ) : message.references?.length ? (
+              <div className="message-badges">
+                {message.references.map((ref) => {
+                  const isHerb =
+                    typeof ref === "string" &&
+                    (ref.startsWith("HERB_") || ref.startsWith("herb::HERB_"));
+
+                  const herbId = ref.startsWith("herb::")
+                    ? ref.replace("herb::", "")
+                    : ref;
+
+                  return isHerb ? (
+                    <button
+                      key={ref}
+                      className="badge badge-outline badge-clickable"
+                      onClick={() => onOpenHerbDetail(herbId)}
+                      type="button"
+                    >
+                      {herbId}
+                    </button>
+                  ) : (
+                    <span key={ref} className="badge badge-outline">
+                      {ref}
+                    </span>
+                  );
+                })}
+              </div>
+            ) : null}
           </div>
         ) : null}
       </div>
@@ -229,6 +420,9 @@ export default function App() {
   const [detailOpen, setDetailOpen] = useState(false);
   const [detailLoading, setDetailLoading] = useState(false);
   const [herbDetail, setHerbDetail] = useState<HerbDetail | null>(null);
+
+  const [prescriptionDetail, setPrescriptionDetail] = useState<PrescriptionDetail | null>(null);
+  const [detailType, setDetailType] = useState<"herb" | "prescription">("herb");
 
   const [authMode, setAuthMode] = useState<"login" | "register">("login");
   const [authLoading, setAuthLoading] = useState(true);
@@ -351,13 +545,37 @@ export default function App() {
 
   const openHerbDetail = async (id: string) => {
   try {
+    setDetailType("herb");
     setDetailOpen(true);
     setDetailLoading(true);
+    setPrescriptionDetail(null);
+
     const detail = await apiClient.getHerbDetail(id);
     setHerbDetail(detail);
   } catch (error) {
     console.error("openHerbDetail crashed:", error);
     setHerbDetail({
+      id,
+      name: "详情加载失败",
+      raw_text: "",
+    });
+  } finally {
+    setDetailLoading(false);
+  }
+};
+
+const openPrescriptionDetail = async (id: string) => {
+  try {
+    setDetailType("prescription");
+    setDetailOpen(true);
+    setDetailLoading(true);
+    setHerbDetail(null);
+
+    const detail = await apiClient.getPrescriptionDetail(id);
+    setPrescriptionDetail(detail);
+  } catch (error) {
+    console.error("openPrescriptionDetail crashed:", error);
+    setPrescriptionDetail({
       id,
       name: "详情加载失败",
       raw_text: "",
@@ -457,69 +675,66 @@ const openConversation = async (id: number) => {
 };
 
   const send = async () => {
-    try {
-      if (!query.trim() || !activeConversation || sending) return;
+  if (!query.trim() || !activeConversation || sending) return;
 
-      const userText = query.trim();
-      setQuery("");
-      setSending(true);
+  const userText = query.trim();
+  setQuery("");
+  setSending(true);
 
-      const userMsg: Message = {
-        id: uid(),
-        role: "user",
-        content: userText,
-        createdAt: now(),
-      };
-
-      updateConversation(activeConversation.id, (old) => ({
-        ...old,
-        title: old.messages.length <= 1 ? summarizeTitle(userText) : old.title,
-        theme: old.theme,
-        updatedAt: now(),
-        messages: [...old.messages, userMsg],
-      }));
-
-      const resp = await askInConversation(activeConversation.id, userText);
-
-const rows = await getConversationMessages(activeConversation.id);
-const mapped = Array.isArray(rows) ? rows.map(toMessage) : [];
-
-setConversations((prev) =>
-  prev.map((c) =>
-    c.id === activeConversation.id
-      ? {
-          ...c,
-          title:
-            typeof resp.title === "string" && resp.title.trim().length > 0
-              ? resp.title.trim()
-              : c.title,
-          updatedAt: now(),
-          messages: mapped,
-        }
-      : c
-  )
-);
-    } catch (error) {
-      console.error("send() crashed:", error);
-
-      if (activeConversation) {
-        const assistantMsg: Message = {
-          id: uid(),
-          role: "assistant",
-          content: "前端渲染或接口处理出错，请查看浏览器控制台。",
-          createdAt: now(),
-        };
-
-        updateConversation(activeConversation.id, (old) => ({
-          ...old,
-          updatedAt: now(),
-          messages: [...old.messages, assistantMsg],
-        }));
-      }
-    } finally {
-      setSending(false);
-    }
+  const userMsg: Message = {
+    id: uid(),
+    role: "user",
+    content: userText,
+    createdAt: now(),
   };
+
+  updateConversation(activeConversation.id, (old) => ({
+    ...old,
+    title: old.messages.length <= 1 ? summarizeTitle(userText) : old.title,
+    updatedAt: now(),
+    messages: [...old.messages, userMsg],
+  }));
+
+  try {
+    const resp = await askInConversation(activeConversation.id, userText);
+
+    const rows = await getConversationMessages(activeConversation.id);
+    const mapped = Array.isArray(rows) ? rows.map(toMessage) : [];
+
+    setConversations((prev) =>
+      prev.map((c) =>
+        c.id === activeConversation.id
+          ? {
+              ...c,
+              title:
+                typeof resp.title === "string" && resp.title.trim().length > 0
+                  ? resp.title.trim()
+                  : c.title,
+              updatedAt: now(),
+              messages: mapped,
+            }
+          : c
+      )
+    );
+  } catch (error) {
+    console.error("send() crashed:", error);
+
+    const errorMsg: Message = {
+      id: uid(),
+      role: "assistant",
+      content: "请求失败，请稍后再试。",
+      createdAt: now(),
+    };
+
+    updateConversation(activeConversation.id, (old) => ({
+      ...old,
+      updatedAt: now(),
+      messages: [...old.messages, errorMsg],
+    }));
+  } finally {
+    setSending(false);
+  }
+};
 
   if (!activeConversation) {
     return <div style={{ color: "white", padding: 20 }}>当前没有可用会话。</div>;
@@ -684,10 +899,11 @@ if (!isAuthenticated) {
             <div className="messages">
               {activeConversation.messages.map((m) => (
                   <MessageBubble
-                    key={m.id}
-                    message={m}
-                    onOpenHerbDetail={openHerbDetail}
-                  />
+                  key={m.id}
+                  message={m}
+                  onOpenHerbDetail={openHerbDetail}
+                  onOpenPrescriptionDetail={openPrescriptionDetail}
+                />
                 ))}
 
               {sending ? (
@@ -735,23 +951,34 @@ if (!isAuthenticated) {
               </button>
 
               {detailLoading ? (
-                <div className="detail-loading">正在加载中药详情...</div>
-              ) : herbDetail ? (
-                <div className="detail-content">
-                  <h3>{herbDetail.name || "中药详情"}</h3>
-                  {herbDetail.pinyin ? <p><strong>拼音：</strong>{herbDetail.pinyin}</p> : null}
-                  {herbDetail.latin_name ? <p><strong>拉丁名：</strong>{herbDetail.latin_name}</p> : null}
-                  {herbDetail.english_name ? <p><strong>英文名：</strong>{herbDetail.english_name}</p> : null}
-                  {herbDetail.alias ? <p><strong>别名：</strong>{herbDetail.alias}</p> : null}
-                  {herbDetail.nature ? <p><strong>性：</strong>{herbDetail.nature}</p> : null}
-                  {herbDetail.flavor ? <p><strong>味：</strong>{herbDetail.flavor}</p> : null}
-                  {herbDetail.meridian ? <p><strong>归经：</strong>{herbDetail.meridian}</p> : null}
-                  {herbDetail.effects ? <p><strong>功效：</strong>{herbDetail.effects}</p> : null}
-                  {herbDetail.indications ? <p><strong>主治：</strong>{herbDetail.indications}</p> : null}
-                </div>
-              ) : (
-                <div className="detail-loading">暂无详情</div>
-              )}
+                  <div className="detail-loading">
+                    {detailType === "herb" ? "正在加载中药详情..." : "正在加载方剂详情..."}
+                  </div>
+                ) : detailType === "herb" && herbDetail ? (
+                  <div className="detail-content">
+                    <h3>{herbDetail.name || "中药详情"}</h3>
+                    {herbDetail.pinyin ? <p><strong>拼音：</strong>{herbDetail.pinyin}</p> : null}
+                    {herbDetail.latin_name ? <p><strong>拉丁名：</strong>{herbDetail.latin_name}</p> : null}
+                    {herbDetail.english_name ? <p><strong>英文名：</strong>{herbDetail.english_name}</p> : null}
+                    {herbDetail.alias ? <p><strong>别名：</strong>{herbDetail.alias}</p> : null}
+                    {herbDetail.nature ? <p><strong>性：</strong>{herbDetail.nature}</p> : null}
+                    {herbDetail.flavor ? <p><strong>味：</strong>{herbDetail.flavor}</p> : null}
+                    {herbDetail.meridian ? <p><strong>归经：</strong>{herbDetail.meridian}</p> : null}
+                    {herbDetail.effects ? <p><strong>功效：</strong>{herbDetail.effects}</p> : null}
+                    {herbDetail.indications ? <p><strong>主治：</strong>{herbDetail.indications}</p> : null}
+                  </div>
+                ) : detailType === "prescription" && prescriptionDetail ? (
+                  <div className="detail-content">
+                    <h3>{prescriptionDetail.name || "方剂详情"}</h3>
+                    {prescriptionDetail.pinyin ? <p><strong>拼音：</strong>{prescriptionDetail.pinyin}</p> : null}
+                    {prescriptionDetail.source ? <p><strong>出处：</strong>{prescriptionDetail.source}</p> : null}
+                    {prescriptionDetail.composition ? <p><strong>组成：</strong>{prescriptionDetail.composition}</p> : null}
+                    {prescriptionDetail.effects ? <p><strong>功效：</strong>{prescriptionDetail.effects}</p> : null}
+                    {prescriptionDetail.indications ? <p><strong>主治：</strong>{prescriptionDetail.indications}</p> : null}
+                  </div>
+                ) : (
+                  <div className="detail-loading">暂无详情</div>
+                )}
             </div>
           </div>
         ) : null}

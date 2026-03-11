@@ -39,6 +39,7 @@ class Message(Base):
     intent = Column(String(100), nullable=True)
     entity = Column(String(255), nullable=True)
     references_json = Column(Text, nullable=True)
+    reference_items_json = Column(Text, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
     conversation = relationship("Conversation", back_populates="messages")

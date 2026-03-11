@@ -107,6 +107,15 @@ meta_cache: List[Dict[str, Any]] = []
 index_cache = None
 model_cache = None
 
+class PrescriptionDetailResponse(BaseModel):
+    id: str
+    name: Optional[str] = None
+    pinyin: Optional[str] = None
+    source: Optional[str] = None
+    composition: Optional[str] = None
+    effects: Optional[str] = None
+    indications: Optional[str] = None
+    raw_text: str = ""
 
 def load_meta() -> List[Dict[str, Any]]:
     items = []
@@ -299,6 +308,7 @@ def generate_conversation_title(question: str, answer: str = "") -> str:
 def build_reference_items(evidence_blocks: List[Dict[str, str]], meta: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """
     把 evidence id 转成更适合前端展示的 reference_items
+    优先返回中文名 name，供前端直接显示
     """
     meta_map = {it.get("id"): it for it in meta}
     result = []
@@ -306,21 +316,45 @@ def build_reference_items(evidence_blocks: List[Dict[str, str]], meta: List[Dict
     for e in evidence_blocks:
         iid = e.get("id")
         typ = e.get("type")
-        item = meta_map.get(iid, {})
+        item = meta_map.get(iid, {}) or {}
         md = item.get("metadata") or {}
+        text = item.get("text", "") or ""
 
-        name = md.get("name")
+        name = None
+
+        # 1. metadata 里的 name 优先
+        if md.get("name"):
+            name = str(md.get("name")).strip()
+
+        # 2. 从常见字段里提取
         if not name:
-            # 兜底：从文本里提取“中药名称”
-            text = item.get("text", "") or ""
-            m = re.search(r"中药名称[:：]\s*(.+)", text)
-            if m:
-                name = m.group(1).strip()
+            for label in ["中药名称", "药名", "名称"]:
+                m = re.search(rf"{label}[:：]\s*(.+)", text)
+                if m:
+                    name = m.group(1).strip()
+                    break
+
+        # 3. herb / prescription / formula 分类型兜底提取名称
+        if not name and typ == "herb":
+            detail = parse_herb_detail(item)
+            name = detail.get("name")
+
+        if not name and typ in {"prescription", "formula"}:
+            detail = parse_prescription_detail(item)
+            name = detail.get("name")
+
+        # 4. 最终兜底
+        if typ == "herb":
+            display_name = name or iid.replace("herb::", "")
+        elif typ in {"prescription", "formula"}:
+            display_name = name or iid.replace("prescription::", "")
+        else:
+            display_name = name or iid
 
         result.append({
             "id": iid,
             "type": typ,
-            "name": name or iid,
+            "name": display_name,
         })
 
     return result
@@ -349,6 +383,32 @@ def parse_herb_detail(item: Dict[str, Any]) -> Dict[str, Any]:
         "effects": extract("功效"),
         "indications": extract("主治/适应证") or extract("主治") or extract("适应证"),
         "alias": extract("别名"),
+        "raw_text": text,
+    }
+
+def parse_prescription_detail(item: Dict[str, Any]) -> Dict[str, Any]:
+    text = item.get("text", "") or ""
+    md = item.get("metadata") or {}
+
+    def extract(label: str) -> Optional[str]:
+        m = re.search(rf"{label}[:：]\s*(.+)", text)
+        return m.group(1).strip() if m else None
+
+    name = (
+        md.get("name")
+        or extract("方剂名称")
+        or extract("中成药名")
+        or extract("名称")
+    )
+
+    return {
+        "id": item.get("id", ""),
+        "name": name,
+        "pinyin": extract("拼音"),
+        "source": extract("出处"),
+        "composition": extract("组成") or extract("药物组成"),
+        "effects": extract("功效"),
+        "indications": extract("主治/适应证") or extract("主治") or extract("适应证"),
         "raw_text": text,
     }
 
@@ -383,11 +443,15 @@ def run_rag(question: str) -> Dict[str, Any]:
     if intent in ("HERB_ATTRIBUTE", "HERB_MECHANISM", "PRESCRIPTION_DEF"):
         if not entity or not validate_entity(entity, intent):
             return {
-                "answer": "当前知识库中未收录该实体，无法给出可靠回答。",
+                "answer": (
+            "当前未能识别到明确的中药或方剂实体，或该实体尚未收录在知识库中。"
+            "建议您检查名称是否准确，或换一种更清晰的提问方式，例如："
+            "“白术的功效是什么？”、“六味地黄丸适用于什么情况？”"
+        ),
                 "intent": intent,
                 "entity": entity,
                 "references": [],
-                "title": generate_conversation_title(question),
+                "title": "实体识别引导",
                 "reference_items": [],
             }
 
@@ -440,21 +504,31 @@ def run_rag(question: str) -> Dict[str, Any]:
 
     else:
         return {
-            "answer": "无法识别该问题类型。",
+             "answer": (
+            "当前未能正确识别您的问题。请尽量围绕中医药相关内容提问，例如：\n"
+            "1. 询问某味中药，如“白术的功效是什么？”\n"
+            "2. 询问某种症状可参考的中药，如“咽喉肿痛可以参考哪些中药？”\n"
+            "3. 询问某个方剂或中成药，如“六味地黄丸的功效是什么？”\n"
+            "请尽量描述明确的中药名称、方剂名称或症状表现。"
+        ),
             "intent": intent,
             "entity": entity,
             "references": [],
-            "title": generate_conversation_title(question),
+            "title": "输入引导",
             "reference_items": [],
         }
 
     if not evidence_items:
         return {
-            "answer": "未检索到可用证据。",
+            "answer": (
+            "当前知识库中暂未检索到与该问题直接相关的中医药证据。"
+            "建议您换一种更明确的提问方式，例如直接说明中药名称、方剂名称，"
+            "或者补充具体症状表现后再试。"
+        ),
             "intent": intent,
             "entity": entity,
             "references": [],
-            "title": generate_conversation_title(question),
+            "title": "检索引导",
             "reference_items": [],
         }
 
@@ -638,6 +712,7 @@ def ask_in_conversation(
         intent=result.get("intent"),
         entity=result.get("entity"),
         references_json=json.dumps(result.get("references", []), ensure_ascii=False),
+        reference_items_json=json.dumps(result.get("reference_items", []), ensure_ascii=False),
         created_at=datetime.utcnow(),
     )
     db.add(assistant_msg)
@@ -660,7 +735,16 @@ def ask(req: AskRequest):
 
 @app.get("/api/herb/{herb_id}", response_model=HerbDetailResponse)
 def get_herb_detail(herb_id: str):
-    full_id = herb_id if herb_id.startswith("herb::") else f"herb::{herb_id}"
+    raw = herb_id.strip()
+
+    if raw.startswith("herb::"):
+        full_id = raw
+    elif raw.startswith("HERB_"):
+        full_id = f"herb::{raw}"
+    elif raw.isdigit():
+        full_id = f"herb::HERB_{raw}"
+    else:
+        full_id = f"herb::{raw}"
 
     for it in meta_cache:
         if it.get("id") == full_id and it.get("type") == "herb":
@@ -670,6 +754,30 @@ def get_herb_detail(herb_id: str):
     return HerbDetailResponse(
         id=herb_id,
         name="未找到该中药",
+        raw_text=""
+    )
+
+@app.get("/api/prescription/{prescription_id}", response_model=PrescriptionDetailResponse)
+def get_prescription_detail(prescription_id: str):
+    raw = prescription_id.strip()
+
+    # 兼容 prescription::Prescription2252 / Prescription2252 / Formula1348
+    candidate_ids = []
+    if raw.startswith("prescription::"):
+        candidate_ids.append(raw)
+        candidate_ids.append(raw.replace("prescription::", ""))
+    else:
+        candidate_ids.append(raw)
+        candidate_ids.append(f"prescription::{raw}")
+
+    for it in meta_cache:
+        if it.get("id") in candidate_ids and it.get("type") in {"prescription", "formula"}:
+            detail = parse_prescription_detail(it)
+            return PrescriptionDetailResponse(**detail)
+
+    return PrescriptionDetailResponse(
+        id=prescription_id,
+        name="未找到该方剂",
         raw_text=""
     )
 
