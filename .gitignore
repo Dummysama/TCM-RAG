@@ -17,3 +17,4 @@ tcm-rag-frontend/dist/
 
 # env
 .venv/
+.DS_Store
